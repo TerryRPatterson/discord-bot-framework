@@ -1,4 +1,4 @@
-"""   
+"""
 Copyright 2018 Terry Patterson
 
    Licensed under the Apache License, Version 2.0 (the "License");
@@ -95,7 +95,7 @@ class Bot(discord.Client):
 
     async def on_message(self, message):
         """Handle messages."""
-        self.process_message(self, message)
+        await self.process_message(self, message)
 
     async def process_message(self, message):
         """Check messages for commands."""
