@@ -95,6 +95,10 @@ class Bot(discord.Client):
 
     async def on_message(self, message):
         """Handle messages."""
+        self.process_message(self, message)
+
+    async def process_message(self, message):
+        """Check messages for commands."""
         if not message.author == self.user:
             if message.content.startswith(self.prefix):
                 try:
