@@ -47,9 +47,9 @@ class Bot(discord.Client):
     def __init__(self, title, prefix, **kwargs):
         """Create variables and init the client."""
         super().__init__(**kwargs)
-        self.__parser = BotParser(prog=title, allow_abbrev=True)
+        self.__parser = BotParser(prog=title, allow_abbrev=True, add_help=False)
         self.__sub_parsers = self.__parser.add_subparsers(dest="command")
-        self.__commands = {}
+        self.commands = {}
         self.prefix = prefix
         self.__menus = {}
         self.__items_per_page = 5
@@ -64,6 +64,35 @@ class Bot(discord.Client):
         for command_name, command in self.builtins.items():
             self.command(command, command_name)
 
+    async def check_admin(self, command, message):
+        """Check if the user has privilges to run elevated commands."""
+        try:
+            if command.bot_admin:
+                if message.author.server_permissions.administrator:
+                    return True
+                else:
+                    message_text = (f"{message.author.mention} that command "
+                                    "requires admin privilges.")
+                    await self.send_message(message.channel, message_text)
+                    return False
+        except AttributeError:
+            return True
+
+    async def check_owner(self, command, message):
+        """Check if the user has privilges to run elevated commands."""
+        try:
+            if command.bot_owner:
+                if message.author == discord.AppInfo.owner:
+                    return True
+                else:
+                    message_text = (f"{message.author.mention} that command "
+                                    "is only accesible to the owner of the "
+                                    "bot.")
+                    await self.send_message(message.channel, message_text)
+                    return False
+        except AttributeError:
+            return True
+
     async def on_message(self, message):
         """Handle messages."""
         if not message.author == self.user:
@@ -73,20 +102,25 @@ class Bot(discord.Client):
                     message_seperated = split(message_no_prefix)
                     list_arguments = list(message_seperated)
                     parsed_args = self.__parser.parse_args(args=list_arguments)
-                    command = parsed_args.command
-                    if command in self.__commands:
-                        await self.__commands[command](message, parsed_args)
+                    command_name = parsed_args.command
+                    if command_name in self.commands:
+                        command = self.commands[command_name]
+                        if (await self.check_admin(command, message) and
+                                await self.check_owner(command, message)):
+                            await command(message, parsed_args)
                 except SyntaxError as error_message:
                     user = message.author
                     await self.send_message(user, error_message)
 
-    async def on_ready(self):
-        """Step to take when the bot is first ready."""
-        print('Logged in as')
-        print(self.user.name)
-        print(self.user.id)
-        print('------')
-        print(self.__commands)
+    def admin(self, command):
+        """Set a method as admin only."""
+        command.bot_admin = True
+        return command
+
+    def owner_only(self, command):
+        """Set method to be owner only."""
+        command.bot_owner = True
+        return command
 
     def command(self, command, name=None):
         """Take in a command then create a sub_parser, and wrapped command."""
@@ -97,7 +131,12 @@ class Bot(discord.Client):
             dict_args = vars(parsed_args)
             return command(message, **dict_args)
 
-        self.__commands[name] = wrapped_command
+        if hasattr(command, "bot_admin"):
+            wrapped_command.bot_admin = True
+        if hasattr(command, "bot_owner"):
+            wrapped_command.bot_owner = True
+
+        self.commands[name] = wrapped_command
         return wrapped_command
 
     def __parse_parameters(self, command, name=None):
@@ -172,7 +211,7 @@ class Bot(discord.Client):
                     await self.send_message(message.channel,
                                             embed=embeded_menu)
                     await self.delete_message(message)
-                self.__commands[identifier] = activate_menu
+                self.commands[identifier] = activate_menu
                 return command
         return register_menu
 
@@ -187,7 +226,7 @@ class Bot(discord.Client):
             await self.send_message(message.channel,
                                     embed=embeded_menu)
             await self.delete_message(message)
-        self.__commands[name] = activate_menu
+        self.commands[name] = activate_menu
 
     async def __find_menu(self, message):
         title_prefix = f"{self.user.name} menu:"
