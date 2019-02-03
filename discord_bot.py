@@ -1,4 +1,6 @@
 """
+Expansion of discord.py to include command registration, and menus.
+
 Copyright 2018 Terry Patterson
 
    Licensed under the Apache License, Version 2.0 (the "License");
