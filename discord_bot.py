@@ -14,11 +14,12 @@ Copyright 2018 Terry Patterson
    limitations under the License.
 """
 import discord
-import asyncio
 import argparse
 import inspect
 import re as regex
+from copy import copy
 from shlex import split
+from functools import wraps, partial
 
 
 class BotParser(argparse.ArgumentParser):
@@ -61,25 +62,49 @@ class Bot(discord.Client):
             "select": self.select,
             "dismiss": self.dismiss
             }
+        self.permission_checks = [
+            self.check_permissions,
+            self.check_owner,
+        ]
         for command_name, command in self.builtins.items():
             self.command(command, command_name)
 
     async def check_admin(self, command, message):
         """Check if the user has privilges to run elevated commands."""
+        command = copy(command)
+        message_text = ()
+        if not hasattr(command, "check_failed"):
+            command.check_failed = message_text
+        await self.send_message(message.channel, message_text)
+        return False
+
+    async def check_permissions(self, command, message):
+        """Check if the user has the permissons require to run the command."""
         try:
-            if command.bot_admin:
-                if message.author.server_permissions.administrator:
-                    return True
-                else:
-                    message_text = (f"{message.author.mention} that command "
-                                    "requires admin privilges.")
-                    await self.send_message(message.channel, message_text)
-                    return False
+            if command.permissions_required:
+                author_permissions = message.author.server_permissions
+                for permission in command.permissions_required:
+                    # permissions is an object so we have to use hasattr
+                    # instead of author_permissions[permission]
+                    if not getattr(author_permissions, permission):
+                        if hasattr(message.author, "nick"):
+                            name = message.author.nick
+                        else:
+                            name = message.author.name
+                        values = {
+                            "name": name,
+                            "mention": message.author.mention,
+                        }
+                        # ** unpacks the dict into keyword arguments
+                        message_text = command.check_failed.format(**values)
+                        await self.send_message(message.channel, message_text)
+                        return False
+            return True
         except AttributeError:
             return True
 
     async def check_owner(self, command, message):
-        """Check if the user has privilges to run elevated commands."""
+        """Check if the message author is the owner of the bot."""
         try:
             if command.bot_owner:
                 if message.author == discord.AppInfo.owner:
@@ -109,36 +134,67 @@ class Bot(discord.Client):
                     command_name = parsed_args.command
                     if command_name in self.commands:
                         command = self.commands[command_name]
-                        if (await self.check_admin(command, message) and
-                                await self.check_owner(command, message)):
+                        passed = True
+                        for check in self.permission_checks:
+                            if not await check(command, message):
+                                passed = False
+                        if passed:
                             await command(message, parsed_args)
                 except SyntaxError as error_message:
                     user = message.author
                     await self.send_message(user, error_message)
 
-    def admin(self, command):
-        """Set a method as admin only."""
-        command.bot_admin = True
-        return command
-
+    # the asterisk means all following paramaters are keyword only
     def owner_only(self, command):
         """Set method to be owner only."""
         command.bot_owner = True
         return command
 
-    def command(self, command, name=None):
+    def permissions_required(self, command=None, permissions=[],
+                             check_failed="Permission check failed"):
+        """Add a check to the command for the permissions listed."""
+        if command is None:
+            return partial(self.permissions_required, permissions=permissions,
+                           check_failed=check_failed)
+        command.permissions_required = permissions
+        command.check_failed = check_failed
+        return command
+
+    default_message = "{mention} that command requires admin privilges."
+
+    def admin(self, check_failed=default_message):
+        """Set a method as admin only."""
+        permissions = ["administrator"]
+        return self.permissions_required(permissions=permissions,
+                                         check_failed=check_failed)
+
+    def command(self, command=None, name=None):
         """Take in a command then create a sub_parser, and wrapped command."""
+        if command is None:
+            if name is None:
+                return partial(command)
+            else:
+                return partial(command, name=name)
         name = self.__parse_parameters(command, name)
 
+        @wraps(command)
         def wrapped_command(message, parsed_args):
             del parsed_args.command
             dict_args = vars(parsed_args)
             return command(message, **dict_args)
 
-        if hasattr(command, "bot_admin"):
-            wrapped_command.bot_admin = True
-        if hasattr(command, "bot_owner"):
-            wrapped_command.bot_owner = True
+        def mirrorAttr(source, dest, attr):
+            try:
+                value = getattr(source, attr)
+                setattr(dest, attr, value)
+                return source
+            except AttributeError:
+                return wrapped_command
+
+        wrapped_command = mirrorAttr(command, wrapped_command, "bot_owner")
+        wrapped_command = mirrorAttr(command, wrapped_command, "check_failed")
+        wrapped_command = mirrorAttr(command, wrapped_command,
+                                     "permissions_required")
 
         self.commands[name] = wrapped_command
         return wrapped_command
